@@ -157,9 +157,11 @@ def ensure_xray():
 
 # ============================== xray 配置与链接 ==============================
 def build_xray_config():
-    # 单端口设计：公开端口是纯 TCP 分流器（VLESS+TCP），按 WS 路径分流到三个 WS 入站。
-    # 注意：主入站必须是 TCP——如果主入站本身是 WS，WS 层会先按自己的 path 校验、
+    # 单端口设计：公开端口是纯 TCP 分流器（VLESS+TCP），按 HTTP 路径分流到三个 XHTTP 入站。
+    # 注意：主入站必须是 TCP——如果主入站本身是 WS/XHTTP，传输层会先按自己的 path 校验、
     # 不匹配直接 404，fallback 根本没机会分流（2026-11-06 本地双版本实测）。
+    # 2026-11-06：hostrix 的 Cloudflare 边缘对 WS 升级返回 502，改用 XHTTP（纯 HTTP 请求，
+    # 走普通 HTTP 即可通过边缘，与订阅服务同理）。
     cfg = {
         "log": {"loglevel": "warning"},
         "inbounds": [
@@ -188,8 +190,8 @@ def build_xray_config():
                     "decryption": "none",
                 },
                 "streamSettings": {
-                    "network": "ws",
-                    "wsSettings": {"path": f"/vless-{STATE['s1']}"},
+                    "network": "xhttp",
+                    "xhttpSettings": {"path": f"/vless-{STATE['s1']}", "mode": "auto"},
                 },
             },
             {
@@ -198,8 +200,8 @@ def build_xray_config():
                 "protocol": "vmess",
                 "settings": {"clients": [{"id": STATE["uuid"], "alterId": 0}]},
                 "streamSettings": {
-                    "network": "ws",
-                    "wsSettings": {"path": f"/vmess-{STATE['s2']}"},
+                    "network": "xhttp",
+                    "xhttpSettings": {"path": f"/vmess-{STATE['s2']}", "mode": "auto"},
                 },
             },
             {
@@ -208,8 +210,8 @@ def build_xray_config():
                 "protocol": "trojan",
                 "settings": {"clients": [{"password": STATE["trojan_pw"]}]},
                 "streamSettings": {
-                    "network": "ws",
-                    "wsSettings": {"path": f"/trojan-{STATE['s3']}"},
+                    "network": "xhttp",
+                    "xhttpSettings": {"path": f"/trojan-{STATE['s3']}", "mode": "auto"},
                 },
             },
         ],
@@ -228,11 +230,11 @@ def build_links(host):
     pw = urllib.parse.quote(STATE["trojan_pw"], safe="")
     vless = (
         f"vless://{u}@{host}:443?encryption=none&security=tls&sni={host}"
-        f"&fp=chrome&type=ws&host={host}&path=%2Fvless-{s1}#Hostrix-VLESS"
+        f"&fp=chrome&type=xhttp&host={host}&path=%2Fvless-{s1}#Hostrix-VLESS"
     )
     vmess_json = {
         "v": "2", "ps": "Hostrix-VMess", "add": host, "port": "443",
-        "id": u, "aid": "0", "scy": "auto", "net": "ws", "type": "none",
+        "id": u, "aid": "0", "scy": "auto", "net": "xhttp", "type": "none",
         "host": host, "path": f"/vmess-{s2}", "tls": "tls", "sni": host,
     }
     vmess = "vmess://" + base64.b64encode(
@@ -240,7 +242,7 @@ def build_links(host):
     ).decode()
     trojan = (
         f"trojan://{pw}@{host}:443?security=tls&sni={host}"
-        f"&type=ws&host={host}&path=%2Ftrojan-{s3}#Hostrix-Trojan"
+        f"&type=xhttp&host={host}&path=%2Ftrojan-{s3}#Hostrix-Trojan"
     )
     text = "\n".join([vless, vmess, trojan])
     b64 = base64.b64encode(text.encode()).decode()
